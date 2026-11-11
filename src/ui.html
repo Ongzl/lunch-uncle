@@ -21,6 +21,7 @@
     }
     .uncle { background: var(--uncle); align-self: flex-start; border-bottom-left-radius: .25rem; }
     .you { background: var(--you); align-self: flex-end; border-bottom-right-radius: .25rem; }
+    .error { background: #fee2e2; color: #991b1b; align-self: flex-start; font-size: .9rem; }
     form { display: flex; gap: .5rem; padding: 1rem; background: #fff; border-top: 1px solid #e5e7eb; }
     input { flex: 1; padding: .6rem .9rem; font-size: 1rem; border: 1px solid #d1d5db; border-radius: .5rem; }
     button { padding: .6rem 1.2rem; font-size: 1rem; border: 0; border-radius: .5rem; background: var(--ink); color: #fff; cursor: pointer; }
@@ -46,8 +47,19 @@
     const input = document.getElementById("input");
     const send = document.getElementById("send");
 
+    // Give up on a reply after this long, so the chat never stays stuck.
+    const REQUEST_TIMEOUT_MS = 60_000;
+    // Only the most recent messages are sent back to the server.
+    const MAX_HISTORY_MESSAGES = 16;
+
     // Conversation so far, in the shape the /chat endpoint expects.
+    // Only successful exchanges are kept; errors are never saved.
     const history = [];
+
+    // One id for this conversation, so the LLM endpoint can reuse its cache.
+    const sessionId = crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36);
 
     function addBubble(role, text) {
       const div = document.createElement("div");
@@ -56,6 +68,19 @@
       chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
       return div;
+    }
+
+    function showError(bubble, text) {
+      bubble.className = "bubble error";
+      bubble.textContent = text;
+    }
+
+    // The model is told to use plain text; strip any markdown that slips through.
+    function stripMarkdown(text) {
+      return text
+        .replace(/\*\*(.+?)\*\*/g, "$1")
+        .replace(/__(.+?)__/g, "$1")
+        .replace(/^#{1,6}\s+/gm, "");
     }
 
     form.addEventListener("submit", async (event) => {
@@ -67,21 +92,46 @@
       send.disabled = true;
       addBubble("user", message);
       const thinking = addBubble("assistant", "Uncle thinking...");
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       try {
         const res = await fetch("/chat", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ history, message }),
+          body: JSON.stringify({ history, message, sessionId }),
+          signal: controller.signal,
         });
-        const data = await res.json();
-        const reply = data.reply ?? data.error ?? "No reply.";
-        thinking.textContent = reply;
+
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          // Not JSON, handled below.
+        }
+
+        const reply = typeof data?.reply === "string" ? data.reply.trim() : "";
+        if (!res.ok || !reply) {
+          showError(
+            thinking,
+            data?.error ?? `Uncle's server had a problem (HTTP ${res.status}). Try again.`,
+          );
+          return;
+        }
+
+        thinking.textContent = stripMarkdown(reply);
         history.push({ role: "user", content: message });
         history.push({ role: "assistant", content: reply });
+        history.splice(0, Math.max(0, history.length - MAX_HISTORY_MESSAGES));
       } catch (err) {
-        thinking.textContent = "Cannot reach Uncle. Try again.";
+        showError(
+          thinking,
+          err.name === "AbortError"
+            ? "Uncle took too long to answer. Try again."
+            : "Cannot reach Uncle. Check your connection and try again.",
+        );
       } finally {
+        clearTimeout(timer);
         send.disabled = false;
         input.focus();
       }
