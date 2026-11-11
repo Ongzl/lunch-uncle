@@ -6,8 +6,15 @@
  * The format functions are the ones covered by tests.
  */
 
-// CT Hub 2, 114 Lavender Street.
+// CT Hub 2, 114 Lavender Street. The default when the user sets no location.
 export const CT_HUB_2 = { latitude: 1.3115, longitude: 103.8615 };
+export const DEFAULT_LOCATION = { ...CT_HUB_2, label: "CT Hub 2, 114 Lavender Street" };
+
+// A box around mainland Singapore and Sentosa; locations outside it are rejected.
+const SINGAPORE_BOUNDS = {
+  low: { latitude: 1.15, longitude: 103.59 },
+  high: { latitude: 1.48, longitude: 104.1 },
+};
 
 // Bus stops on Lavender Street closest to CT Hub 2.
 export const NEARBY_BUS_STOPS = [
@@ -19,18 +26,24 @@ const SEARCH_RADIUS_METRES = 800;
 const MAX_PLACES_FETCHED = 10;
 const MAX_PLACES_RETURNED = 5;
 const FORECAST_AREA = "Kallang";
+const NEARBY_STOP_COUNT = 2;
+const MAX_LOCATION_LABEL_CHARS = 80;
+const MAX_GEOCODE_RESULTS = 5;
 const TOOL_TIMEOUT_MS = 8_000;
 
 // How long each tool's results are reused before fetching again.
 const PLACES_TTL_MS = 10 * 60_000;
 const FORECAST_TTL_MS = 5 * 60_000;
 const BUS_TTL_MS = 20_000;
+const BUS_STOPS_TTL_MS = 24 * 60 * 60_000;
+const GEOCODE_TTL_MS = 24 * 60 * 60_000;
 const CACHE_MAX_ENTRIES = 200;
 
 const PLACES_URL = "https://places.googleapis.com/v1/places:searchText";
 const FORECAST_URL =
   "https://api-open.data.gov.sg/v2/real-time/api/two-hr-forecast";
 const BUS_URL = "https://arrivelah2.busrouter.sg/";
+const BUS_STOPS_URL = "https://data.busrouter.sg/v1/stops.min.json";
 
 // ---------------------------------------------------------------------------
 // Definitions sent to the model
@@ -42,7 +55,7 @@ export const toolDefinitions = [
     function: {
       name: "find_lunch_places",
       description:
-        `Search for places to eat within ${SEARCH_RADIUS_METRES} m of CT Hub 2, nearest first. ` +
+        `Search for places to eat within ${SEARCH_RADIUS_METRES} m of the user's location, nearest first. ` +
         "Returns name, rating, walking distance in metres, and open_now (true, false, or null when unknown).",
       parameters: {
         type: "object",
@@ -66,7 +79,7 @@ export const toolDefinitions = [
     function: {
       name: "get_rain_forecast",
       description:
-        "Get the current two-hour weather forecast for the Kallang area, which covers CT Hub 2. " +
+        "Get the current two-hour weather forecast for the area nearest the user's location. " +
         "It only covers the period in valid_period, not later in the day.",
       parameters: { type: "object", properties: {} },
     },
@@ -77,7 +90,7 @@ export const toolDefinitions = [
       name: "get_bus_arrivals",
       description:
         "Get the next bus arrivals at a Singapore bus stop, by five-digit stop code. " +
-        `Stops next to CT Hub 2: ${NEARBY_BUS_STOPS.map((s) => `${s.code} (${s.name})`).join(", ")}.`,
+        "The stops nearest the user are listed in their message.",
       parameters: {
         type: "object",
         properties: {
@@ -128,7 +141,7 @@ export function validateToolArgs(name, args) {
  * Run one tool call requested by the model and return the result as a string.
  * Never throws: failures come back as {error} so the model can work around them.
  */
-export async function executeTool(name, args, env) {
+export async function executeTool(name, args, env, origin = CT_HUB_2) {
   const invalid = validateToolArgs(name, args);
   if (invalid) {
     return JSON.stringify({ error: invalid });
@@ -136,9 +149,9 @@ export async function executeTool(name, args, env) {
   try {
     switch (name) {
       case "find_lunch_places":
-        return JSON.stringify(await findLunchPlaces(args, env));
+        return JSON.stringify(await findLunchPlaces(args, env, origin));
       case "get_rain_forecast":
-        return JSON.stringify(await getRainForecast());
+        return JSON.stringify(await getRainForecast(origin));
       case "get_bus_arrivals":
         return JSON.stringify(await getBusArrivals(args));
     }
@@ -186,18 +199,19 @@ async function fetchJson(url, init = {}) {
 // find_lunch_places
 // ---------------------------------------------------------------------------
 
-async function findLunchPlaces({ query, open_now = false }, env) {
+async function findLunchPlaces({ query, open_now = false }, env, origin) {
   if (!env.GOOGLE_PLACES_API_KEY) {
     return { error: "Place search is not set up on this server." };
   }
-  const key = `places:${query.trim().toLowerCase()}:${open_now}`;
+  const where = `${origin.latitude.toFixed(4)},${origin.longitude.toFixed(4)}`;
+  const key = `places:${where}:${query.trim().toLowerCase()}:${open_now}`;
   return cached(key, PLACES_TTL_MS, async () => {
     const body = {
       textQuery: query,
       openNow: open_now,
       pageSize: MAX_PLACES_FETCHED,
       locationRestriction: {
-        rectangle: boundingBox(CT_HUB_2, SEARCH_RADIUS_METRES),
+        rectangle: boundingBox(origin, SEARCH_RADIUS_METRES),
       },
     };
 
@@ -216,7 +230,7 @@ async function findLunchPlaces({ query, open_now = false }, env) {
       return { error: `Places API returned ${res.status}` };
     }
     return {
-      places: formatPlaces(res.data?.places ?? [], CT_HUB_2, {
+      places: formatPlaces(res.data?.places ?? [], origin, {
         maxDistance: SEARCH_RADIUS_METRES,
         limit: MAX_PLACES_RETURNED,
       }),
@@ -284,14 +298,33 @@ export function haversineMetres(a, b) {
 // get_rain_forecast
 // ---------------------------------------------------------------------------
 
-async function getRainForecast() {
-  return cached("forecast", FORECAST_TTL_MS, async () => {
-    const res = await fetchJson(FORECAST_URL);
-    if (!res.ok) {
-      return { error: `Forecast API returned ${res.status}` };
-    }
-    return formatForecast(res.data, FORECAST_AREA);
+async function getRainForecast(origin) {
+  const res = await cached("forecast", FORECAST_TTL_MS, async () => {
+    const r = await fetchJson(FORECAST_URL);
+    return r.ok ? { payload: r.data } : { error: `Forecast API returned ${r.status}` };
   });
+  if (res.error) {
+    return res;
+  }
+  const area = nearestForecastArea(res.payload?.data?.area_metadata, origin) ?? FORECAST_AREA;
+  return formatForecast(res.payload, area);
+}
+
+/**
+ * The name of the forecast area whose label point is closest to origin,
+ * or null if the metadata has no usable areas.
+ */
+export function nearestForecastArea(areaMetadata, origin) {
+  if (!Array.isArray(areaMetadata)) {
+    return null;
+  }
+  let best = null;
+  for (const a of areaMetadata) {
+    if (typeof a?.name !== "string" || !hasCoordinates(a.label_location)) continue;
+    const d = haversineMetres(origin, a.label_location);
+    if (!best || d < best.d) best = { name: a.name, d };
+  }
+  return best?.name ?? null;
 }
 
 /**
@@ -346,4 +379,144 @@ function minutesFromNow(arrival) {
     return null;
   }
   return Math.max(0, Math.round(arrival.duration_ms / 60000));
+}
+
+// ---------------------------------------------------------------------------
+// User location
+// ---------------------------------------------------------------------------
+
+/**
+ * True if point is inside the Singapore bounding box.
+ */
+export function isInSingapore(point) {
+  return (
+    hasCoordinates(point) &&
+    point.latitude >= SINGAPORE_BOUNDS.low.latitude &&
+    point.latitude <= SINGAPORE_BOUNDS.high.latitude &&
+    point.longitude >= SINGAPORE_BOUNDS.low.longitude &&
+    point.longitude <= SINGAPORE_BOUNDS.high.longitude
+  );
+}
+
+/**
+ * Validate a location sent by the browser. Returns {location} with a cleaned
+ * label, or {error}. A missing location means the default, CT Hub 2.
+ */
+export function parseUserLocation(raw) {
+  if (raw === undefined || raw === null) {
+    return { location: DEFAULT_LOCATION };
+  }
+  if (typeof raw !== "object" || !hasCoordinates(raw)) {
+    return { error: "location must have numeric latitude and longitude." };
+  }
+  if (!isInSingapore(raw)) {
+    return { error: "Uncle only knows Singapore. Pick a location in Singapore." };
+  }
+  // The label goes into the prompt, so keep it short and plain.
+  const label =
+    typeof raw.label === "string"
+      ? raw.label
+          .replace(/[^\p{L}\p{N} ,.'#&()\/-]/gu, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, MAX_LOCATION_LABEL_CHARS)
+      : "";
+  return {
+    location: {
+      latitude: raw.latitude,
+      longitude: raw.longitude,
+      label: label || "The user's chosen location",
+    },
+  };
+}
+
+/**
+ * The bus stops nearest to origin.
+ * stops is the busrouter map: { code: [longitude, latitude, name, road] }.
+ */
+export function nearestBusStops(stops, origin, count = NEARBY_STOP_COUNT) {
+  if (!stops || typeof stops !== "object") {
+    return [];
+  }
+  return Object.entries(stops)
+    .filter(([, v]) => Array.isArray(v) && typeof v[0] === "number" && typeof v[1] === "number")
+    .map(([code, [longitude, latitude, name, road]]) => ({
+      code,
+      name: [name, road].filter(Boolean).join(", "),
+      distance_m: Math.round(haversineMetres(origin, { latitude, longitude })),
+    }))
+    .sort((a, b) => a.distance_m - b.distance_m)
+    .slice(0, count);
+}
+
+/**
+ * The bus stops nearest to a location. Never throws; returns [] on failure.
+ */
+export async function findNearbyBusStops(location) {
+  if (location.latitude === CT_HUB_2.latitude && location.longitude === CT_HUB_2.longitude) {
+    return NEARBY_BUS_STOPS;
+  }
+  try {
+    const res = await cached("bus-stops", BUS_STOPS_TTL_MS, async () => {
+      const r = await fetchJson(BUS_STOPS_URL);
+      return r.ok ? { stops: r.data } : { error: `Bus stop list returned ${r.status}` };
+    });
+    return res.error ? [] : nearestBusStops(res.stops, location);
+  } catch (err) {
+    console.error("bus stop lookup failed:", err);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Address search for the location picker
+// ---------------------------------------------------------------------------
+
+/**
+ * Look up a Singapore address, postal code or place name.
+ * Returns {results} or {error}.
+ */
+export async function geocode(query, env) {
+  if (!env.GOOGLE_PLACES_API_KEY) {
+    return { error: "Address search is not set up on this server." };
+  }
+  const key = `geocode:${query.trim().toLowerCase()}`;
+  return cached(key, GEOCODE_TTL_MS, async () => {
+    const res = await fetchJson(PLACES_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Goog-Api-Key": env.GOOGLE_PLACES_API_KEY,
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location",
+      },
+      body: JSON.stringify({
+        textQuery: query,
+        regionCode: "SG",
+        pageSize: MAX_GEOCODE_RESULTS,
+        locationRestriction: { rectangle: SINGAPORE_BOUNDS },
+      }),
+    });
+    if (!res.ok) {
+      return { error: `Address search returned ${res.status}` };
+    }
+    return { results: formatGeocodeResults(res.data?.places) };
+  });
+}
+
+/**
+ * Shape Places results into location choices inside Singapore.
+ */
+export function formatGeocodeResults(places) {
+  if (!Array.isArray(places)) {
+    return [];
+  }
+  return places
+    .filter((p) => p && isInSingapore(p.location))
+    .slice(0, MAX_GEOCODE_RESULTS)
+    .map((p) => ({
+      label: p.displayName?.text ?? p.formattedAddress ?? "Unnamed place",
+      address: p.formattedAddress ?? "",
+      latitude: p.location.latitude,
+      longitude: p.location.longitude,
+    }));
 }

@@ -1,5 +1,5 @@
 import { buildSystemPrompt, buildUserMessage } from "./prompt.js";
-import { toolDefinitions, executeTool } from "./tools.js";
+import { toolDefinitions, executeTool, findNearbyBusStops, DEFAULT_LOCATION } from "./tools.js";
 
 // OpenCode Go endpoint and model (OpenAI-compatible).
 const LLM_BASE_URL = "https://opencode.ai/inference/go/openai/v1";
@@ -30,17 +30,29 @@ export class ConfigError extends Error {
  * history is the prior conversation as OpenAI-style {role, content} messages;
  * pass it through sanitizeHistory first. sessionId should stay the same for
  * the whole conversation so the LLM endpoint can reuse its prompt cache.
+ * location is {latitude, longitude, label} from parseUserLocation.
  */
-export async function runLoop(history, message, env, sessionId = crypto.randomUUID()) {
+export async function runLoop(
+  history,
+  message,
+  env,
+  sessionId = crypto.randomUUID(),
+  location = DEFAULT_LOCATION,
+) {
   if (!env.OPENCODE_API_KEY) {
     throw new ConfigError("OPENCODE_API_KEY is not set");
   }
 
+  const stops = await findNearbyBusStops(location);
   const messages = [
     { role: "system", content: buildSystemPrompt() },
     ...history,
-    { role: "user", content: buildUserMessage(message, new Date()) },
+    {
+      role: "user",
+      content: buildUserMessage(message, new Date(), { label: location.label, stops }),
+    },
   ];
+  const origin = { latitude: location.latitude, longitude: location.longitude };
 
   const deadline = Date.now() + TURN_DEADLINE_MS;
 
@@ -81,7 +93,7 @@ export async function runLoop(history, message, env, sessionId = crypto.randomUU
           ? JSON.stringify({ error: "Tool call had no function name." })
           : parsed.error
             ? JSON.stringify({ error: parsed.error })
-            : await executeTool(name, parsed.args, env);
+            : await executeTool(name, parsed.args, env, origin);
         return { role: "tool", tool_call_id: call?.id ?? `call_${i}`, content };
       }),
     );

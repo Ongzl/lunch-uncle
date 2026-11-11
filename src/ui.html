@@ -3,42 +3,165 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>Lunch Uncle</title>
+  <script>
+    // Apply the saved theme before the page paints, so it never flashes.
+    try {
+      const saved = localStorage.getItem("uncle-theme");
+      if (saved && saved !== "system") document.documentElement.dataset.theme = saved;
+    } catch {}
+  </script>
   <style>
-    :root { --uncle: #fde68a; --you: #dbeafe; --ink: #1f2937; }
+    /* Light is the default. "System" (no data-theme) follows the device. */
+    :root {
+      --bg: #f9fafb; --surface: #ffffff; --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb;
+      --uncle: #fde68a; --uncle-ink: #1f2937; --you: #dbeafe; --you-ink: #1f2937;
+      --accent: #1f2937; --accent-ink: #ffffff; --field: #ffffff; --field-line: #d1d5db;
+      --error-bg: #fee2e2; --error-ink: #991b1b; --hover: #f3f4f6;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme]) {
+        --bg: #111418; --surface: #1a1e24; --ink: #e5e7eb; --muted: #9ca3af; --line: #2b313a;
+        --uncle: #4a3b12; --uncle-ink: #fde68a; --you: #1e3a5f; --you-ink: #dbeafe;
+        --accent: #fbbf24; --accent-ink: #111418; --field: #111418; --field-line: #3a414c;
+        --error-bg: #3f1d1d; --error-ink: #fca5a5; --hover: #232832;
+        color-scheme: dark;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #111418; --surface: #1a1e24; --ink: #e5e7eb; --muted: #9ca3af; --line: #2b313a;
+      --uncle: #4a3b12; --uncle-ink: #fde68a; --you: #1e3a5f; --you-ink: #dbeafe;
+      --accent: #fbbf24; --accent-ink: #111418; --field: #111418; --field-line: #3a414c;
+      --error-bg: #3f1d1d; --error-ink: #fca5a5; --hover: #232832;
+      color-scheme: dark;
+    }
+    /* Kopi: warm coffee-shop browns. */
+    :root[data-theme="kopi"] {
+      --bg: #f5ede3; --surface: #fffaf3; --ink: #3b2a1e; --muted: #7a6352; --line: #e3d3c0;
+      --uncle: #e8c9a0; --uncle-ink: #3b2a1e; --you: #f0e0cc; --you-ink: #3b2a1e;
+      --accent: #6b4226; --accent-ink: #fffaf3; --field: #fffaf3; --field-line: #d7c2a8;
+      --error-bg: #f8dcd6; --error-ink: #8a2c1b; --hover: #efe3d4;
+      color-scheme: light;
+    }
+    /* Pandan: soft greens. */
+    :root[data-theme="pandan"] {
+      --bg: #eef5ee; --surface: #fbfefb; --ink: #1e3326; --muted: #567060; --line: #d3e4d6;
+      --uncle: #bfe3c4; --uncle-ink: #1e3326; --you: #e2efe4; --you-ink: #1e3326;
+      --accent: #2f7a46; --accent-ink: #fbfefb; --field: #fbfefb; --field-line: #b9d3be;
+      --error-bg: #fbe0dc; --error-ink: #8f2a1d; --hover: #e3efe5;
+      color-scheme: light;
+    }
+
     * { box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
       margin: 0; font-family: system-ui, sans-serif; color: var(--ink);
-      background: #f9fafb; display: flex; flex-direction: column; height: 100vh;
+      background: var(--bg); display: flex; flex-direction: column;
     }
-    header { padding: 1rem; background: #fff; border-bottom: 1px solid #e5e7eb; }
+    header {
+      padding: .75rem 1rem; background: var(--surface); border-bottom: 1px solid var(--line);
+      display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; justify-content: space-between;
+    }
+    .title { min-width: 0; }
     header h1 { margin: 0; font-size: 1.25rem; }
-    header p { margin: .25rem 0 0; color: #6b7280; font-size: .875rem; }
+    .where { margin: .2rem 0 0; color: var(--muted); font-size: .875rem; display: flex; flex-wrap: wrap; gap: .25rem .5rem; align-items: center; }
+    .where strong { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+    .controls { display: flex; gap: .5rem; align-items: center; }
+    label.small { font-size: .8rem; color: var(--muted); }
+
+    .link {
+      background: none; border: 0; padding: 0; font: inherit; font-size: .875rem; color: var(--accent);
+      text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+    }
+    :root:not([data-theme]) .link, :root[data-theme="light"] .link { color: #1d4ed8; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme]) .link { color: var(--accent); } }
+
+    select, input {
+      font: inherit; color: var(--ink); background: var(--field);
+      border: 1px solid var(--field-line); border-radius: .5rem;
+    }
+    select { padding: .35rem .5rem; font-size: .875rem; }
+    input { padding: .6rem .9rem; font-size: 1rem; }
+
+    #location-panel {
+      background: var(--surface); border-bottom: 1px solid var(--line); padding: .75rem 1rem;
+      display: grid; gap: .6rem;
+    }
+    .row { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .row input { flex: 1 1 12rem; min-width: 0; }
+    #location-results { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
+    #location-results button {
+      width: 100%; text-align: left; background: none; color: var(--ink); border: 1px solid var(--line);
+      border-radius: .5rem; padding: .5rem .75rem; font: inherit; cursor: pointer;
+    }
+    #location-results button:hover { background: var(--hover); }
+    #location-results small { display: block; color: var(--muted); }
+    #location-status { margin: 0; font-size: .875rem; color: var(--muted); }
+    #location-status.bad { color: var(--error-ink); }
+
     #chat { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
     .bubble {
       max-width: 75%; padding: .6rem .9rem; border-radius: 1rem; line-height: 1.4;
       white-space: pre-wrap; word-wrap: break-word;
     }
-    .uncle { background: var(--uncle); align-self: flex-start; border-bottom-left-radius: .25rem; }
-    .you { background: var(--you); align-self: flex-end; border-bottom-right-radius: .25rem; }
-    .error { background: #fee2e2; color: #991b1b; align-self: flex-start; font-size: .9rem; }
-    form { display: flex; gap: .5rem; padding: 1rem; background: #fff; border-top: 1px solid #e5e7eb; }
-    input { flex: 1; padding: .6rem .9rem; font-size: 1rem; border: 1px solid #d1d5db; border-radius: .5rem; }
-    button { padding: .6rem 1.2rem; font-size: 1rem; border: 0; border-radius: .5rem; background: var(--ink); color: #fff; cursor: pointer; }
-    button:disabled { opacity: .5; cursor: default; }
+    .uncle { background: var(--uncle); color: var(--uncle-ink); align-self: flex-start; border-bottom-left-radius: .25rem; }
+    .you { background: var(--you); color: var(--you-ink); align-self: flex-end; border-bottom-right-radius: .25rem; }
+    .error { background: var(--error-bg); color: var(--error-ink); align-self: flex-start; font-size: .9rem; }
+    .note { align-self: center; color: var(--muted); font-size: .8rem; }
+
+    form#form { display: flex; gap: .5rem; padding: 1rem; background: var(--surface); border-top: 1px solid var(--line); }
+    form#form input { flex: 1; min-width: 0; }
+    .btn {
+      padding: .6rem 1.2rem; font-size: 1rem; border: 0; border-radius: .5rem;
+      background: var(--accent); color: var(--accent-ink); cursor: pointer; font-family: inherit;
+    }
+    .btn.secondary { background: none; color: var(--ink); border: 1px solid var(--field-line); }
+    .btn:disabled { opacity: .5; cursor: default; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Lunch Uncle</h1>
-    <p>Tell Uncle what you feel like eating. He is at CT Hub 2, Lavender.</p>
+    <div class="title">
+      <h1>Lunch Uncle</h1>
+      <p class="where">
+        <span>Uncle thinks you are at <strong id="location-label">CT Hub 2, Lavender</strong></span>
+        <button id="location-toggle" class="link" type="button" aria-expanded="false" aria-controls="location-panel">Change location</button>
+      </p>
+    </div>
+    <div class="controls">
+      <label class="small" for="theme">Theme</label>
+      <select id="theme">
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="kopi">Kopi</option>
+        <option value="pandan">Pandan</option>
+      </select>
+    </div>
   </header>
+
+  <section id="location-panel" hidden aria-label="Set your location">
+    <form id="location-form" class="row">
+      <input id="location-query" placeholder="Postal code, address or place, e.g. 238859" autocomplete="off" aria-label="Postal code, address or place">
+      <button class="btn" type="submit">Search</button>
+    </form>
+    <div class="row">
+      <button id="use-gps" class="btn secondary" type="button">Use my current location</button>
+      <button id="use-default" class="btn secondary" type="button">Back to CT Hub 2</button>
+    </div>
+    <p id="location-status" aria-live="polite"></p>
+    <ul id="location-results"></ul>
+  </section>
 
   <div id="chat"></div>
 
   <form id="form">
-    <input id="input" placeholder="Uncle, where to eat?" autocomplete="off" autofocus>
-    <button id="send" type="submit">Send</button>
+    <input id="input" placeholder="Uncle, where to eat?" autocomplete="off" autofocus aria-label="Message">
+    <button id="send" class="btn" type="submit">Send</button>
   </form>
 
   <script>
@@ -61,6 +184,152 @@
       ? crypto.randomUUID()
       : Math.random().toString(36).slice(2) + Date.now().toString(36);
 
+    // Saved settings live only in this browser. Storage can be blocked, so
+    // every read and write is guarded.
+    function load(key) {
+      try { return localStorage.getItem(key); } catch { return null; }
+    }
+    function save(key, value) {
+      try {
+        if (value === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      } catch {}
+    }
+
+    // ---- Theme ----------------------------------------------------------
+    const themeSelect = document.getElementById("theme");
+    themeSelect.value = load("uncle-theme") ?? "system";
+    themeSelect.addEventListener("change", () => {
+      const value = themeSelect.value;
+      if (value === "system") delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = value;
+      save("uncle-theme", value);
+    });
+
+    // ---- Location -------------------------------------------------------
+    // null means the default: CT Hub 2, which the server uses when no
+    // location is sent.
+    const DEFAULT_LABEL = "CT Hub 2, Lavender";
+    let userLocation = null;
+    try { userLocation = JSON.parse(load("uncle-location")); } catch {}
+
+    const locationLabel = document.getElementById("location-label");
+    const locationPanel = document.getElementById("location-panel");
+    const locationToggle = document.getElementById("location-toggle");
+    const locationForm = document.getElementById("location-form");
+    const locationQuery = document.getElementById("location-query");
+    const locationStatus = document.getElementById("location-status");
+    const locationResults = document.getElementById("location-results");
+
+    function showLocation() {
+      locationLabel.textContent = userLocation?.label ?? DEFAULT_LABEL;
+    }
+
+    function setStatus(text, bad = false) {
+      locationStatus.textContent = text;
+      locationStatus.className = bad ? "bad" : "";
+    }
+
+    function openPanel(open) {
+      locationPanel.hidden = !open;
+      locationToggle.setAttribute("aria-expanded", String(open));
+      locationToggle.textContent = open ? "Close" : "Change location";
+      if (open) locationQuery.focus();
+    }
+
+    function setLocation(location) {
+      userLocation = location;
+      save("uncle-location", location ? JSON.stringify(location) : null);
+      showLocation();
+      openPanel(false);
+      setStatus("");
+      locationResults.replaceChildren();
+      addNote(`Location set: ${location?.label ?? DEFAULT_LABEL}`);
+    }
+
+    // Matches the box the server accepts.
+    function inSingapore(lat, lng) {
+      return lat >= 1.15 && lat <= 1.48 && lng >= 103.59 && lng <= 104.1;
+    }
+
+    locationToggle.addEventListener("click", () => openPanel(locationPanel.hidden));
+    document.getElementById("use-default").addEventListener("click", () => setLocation(null));
+
+    document.getElementById("use-gps").addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        setStatus("This browser cannot share your location. Search for an address instead.", true);
+        return;
+      }
+      setStatus("Asking your browser for your location...");
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+          if (!inSingapore(coords.latitude, coords.longitude)) {
+            setStatus("Your browser says you are outside Singapore. Search for an address instead.", true);
+            return;
+          }
+          setLocation({
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            label: "Your current location",
+          });
+        },
+        (err) => {
+          setStatus(
+            err.code === err.PERMISSION_DENIED
+              ? "Location access was blocked. Allow it in your browser, or search for an address instead."
+              : "Could not get your location. Search for an address instead.",
+            true,
+          );
+        },
+        { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+      );
+    });
+
+    locationForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const q = locationQuery.value.trim();
+      if (q.length < 2) {
+        setStatus("Type a postal code, address or place name.", true);
+        return;
+      }
+      setStatus("Searching...");
+      locationResults.replaceChildren();
+      try {
+        const res = await fetch(`/geocode?q=${encodeURIComponent(q)}`, {
+          signal: AbortSignal.timeout ? AbortSignal.timeout(15_000) : undefined,
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !Array.isArray(data?.results)) {
+          setStatus(data?.error ?? "Address search is not working right now.", true);
+          return;
+        }
+        if (data.results.length === 0) {
+          setStatus("No places in Singapore matched. Try a postal code.", true);
+          return;
+        }
+        setStatus("Pick one:");
+        for (const r of data.results) {
+          const li = document.createElement("li");
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = r.label;
+          if (r.address && r.address !== r.label) {
+            const small = document.createElement("small");
+            small.textContent = r.address;
+            btn.appendChild(small);
+          }
+          btn.addEventListener("click", () =>
+            setLocation({ latitude: r.latitude, longitude: r.longitude, label: r.label }),
+          );
+          li.appendChild(btn);
+          locationResults.appendChild(li);
+        }
+      } catch {
+        setStatus("Could not reach the address search. Check your connection.", true);
+      }
+    });
+
+    // ---- Chat -----------------------------------------------------------
     function addBubble(role, text) {
       const div = document.createElement("div");
       div.className = `bubble ${role === "user" ? "you" : "uncle"}`;
@@ -68,6 +337,14 @@
       chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
       return div;
+    }
+
+    function addNote(text) {
+      const div = document.createElement("div");
+      div.className = "note";
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
     }
 
     function showError(bubble, text) {
@@ -99,7 +376,7 @@
         const res = await fetch("/chat", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ history, message, sessionId }),
+          body: JSON.stringify({ history, message, sessionId, location: userLocation ?? undefined }),
           signal: controller.signal,
         });
 
@@ -137,6 +414,7 @@
       }
     });
 
+    showLocation();
     addBubble("assistant", "Eh, what you want to eat? Don't waste my time.");
   </script>
 </body>
