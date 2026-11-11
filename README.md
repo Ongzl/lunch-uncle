@@ -4,7 +4,7 @@ Lunch Uncle is a chatbot that tells you where to eat lunch near CT Hub 2, Lavend
 
 ## Architecture
 
-Lunch Uncle runs as a single Cloudflare Worker. `src/index.js` routes requests: `GET /` serves the chat page from `src/ui.html`, and `POST /chat` hands the turn to the agentic loop in `src/loop.js`. The loop calls an OpenAI-compatible chat completions endpoint, passing the tool definitions from `src/tools.js`. When the model asks for a tool call, the loop runs it, appends the result to the message list, and calls the model again. This repeats until the model gives a final answer with no more tool calls. `src/prompt.js` builds the system prompt that sets Uncle's persona and rules. There are three tools: `find_lunch_places`, which queries the Google Places API (New) Text Search, biased towards CT Hub 2; `get_rain_forecast`, which reads the two-hour forecast from data.gov.sg (no key needed); and `get_bus_arrivals`, which reads live arrivals from arrivelah (no key needed).
+Lunch Uncle runs as a single Cloudflare Worker. `src/index.js` routes requests: `GET /` serves the chat page from `src/ui.html`, and `POST /chat` hands the turn to the agentic loop in `src/loop.js`. The loop calls an OpenAI-compatible chat completions endpoint, passing the tool definitions from `src/tools.js`. When the model asks for a tool call, the loop runs it, appends the result to the message list, and calls the model again. This repeats until the model gives a final answer with no more tool calls, up to 8 rounds and 45 seconds per turn. Tool calls in the same round run in parallel, and a tool that fails returns an error for the model to work around instead of failing the turn. `src/prompt.js` builds the system prompt that sets Uncle's persona and rules. The system prompt never changes between requests so the endpoint can cache it; the current Singapore time is added to each user message instead. There are three tools: `find_lunch_places`, which queries the Google Places API (New) Text Search, restricted to 800 m around CT Hub 2 and sorted nearest first; `get_rain_forecast`, which reads the two-hour forecast from data.gov.sg (no key needed); and `get_bus_arrivals`, which reads live arrivals from arrivelah (no key needed).
 
 ## Request flow
 
@@ -42,7 +42,7 @@ sequenceDiagram
    OPENCODE_API_KEY=your-key-here
    GOOGLE_PLACES_API_KEY=your-key-here
    ```
-4. Fill in the two `TODO` constants at the top of `src/loop.js`: `LLM_BASE_URL` and `LLM_MODEL`, for the OpenCode Go endpoint and model. The Go endpoint requires an `x-opencode-session` header, which `callModel` already sends.
+4. Check the two constants at the top of `src/loop.js`: `LLM_BASE_URL` and `LLM_MODEL`. They are set for the OpenCode Go endpoint (`https://opencode.ai/inference/go/openai/v1`) and `glm-5.3`; change them to use another OpenAI-compatible provider. The Go endpoint uses the `x-opencode-session` header for prompt caching: the chat page sends one session id per conversation and `callModel` forwards it.
 5. Start the dev server:
    ```sh
    npm run dev

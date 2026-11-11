@@ -1,18 +1,28 @@
 import ui from "./ui.html";
-import { runLoop } from "./loop.js";
+import { runLoop, sanitizeHistory, ConfigError } from "./loop.js";
+
+const MAX_MESSAGE_CHARS = 500;
+const MAX_BODY_BYTES = 64 * 1024;
+const SESSION_ID = /^[A-Za-z0-9-]{8,64}$/;
 
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
 
-    if (request.method === "GET" && pathname === "/") {
-      return new Response(ui, {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+    if (pathname === "/") {
+      if (request.method === "GET" || request.method === "HEAD") {
+        return new Response(request.method === "HEAD" ? null : ui, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      return methodNotAllowed("GET, HEAD");
     }
 
-    if (request.method === "POST" && pathname === "/chat") {
-      return handleChat(request, env);
+    if (pathname === "/chat") {
+      if (request.method === "POST") {
+        return handleChat(request, env);
+      }
+      return methodNotAllowed("POST");
     }
 
     return new Response("Not found", { status: 404 });
@@ -20,25 +30,64 @@ export default {
 };
 
 async function handleChat(request, env) {
+  const declaredLength = Number(request.headers.get("content-length") ?? 0);
+  if (declaredLength > MAX_BODY_BYTES) {
+    return json({ error: "Request is too large." }, 413);
+  }
+
+  let text;
+  try {
+    text = await request.text();
+  } catch {
+    return json({ error: "Could not read the request body." }, 400);
+  }
+  if (text.length > MAX_BODY_BYTES) {
+    return json({ error: "Request is too large." }, 413);
+  }
+
   let body;
   try {
-    body = await request.json();
+    body = JSON.parse(text);
   } catch {
-    return json({ error: "Body must be JSON" }, 400);
+    return json({ error: "Body must be JSON." }, 400);
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return json({ error: "Body must be a JSON object." }, 400);
   }
 
-  const { history = [], message } = body;
+  const { history = [], message, sessionId } = body;
   if (typeof message !== "string" || message.trim() === "") {
-    return json({ error: "message is required" }, 400);
+    return json({ error: "message is required." }, 400);
   }
+  if (message.length > MAX_MESSAGE_CHARS) {
+    return json({ error: `Keep your message under ${MAX_MESSAGE_CHARS} characters.` }, 400);
+  }
+  if (!Array.isArray(history)) {
+    return json({ error: "history must be an array." }, 400);
+  }
+
+  const session =
+    typeof sessionId === "string" && SESSION_ID.test(sessionId)
+      ? sessionId
+      : crypto.randomUUID();
 
   try {
-    const reply = await runLoop(history, message, env);
+    const reply = await runLoop(sanitizeHistory(history), message.trim(), env, session);
     return json({ reply });
   } catch (err) {
     console.error("chat failed:", err);
-    return json({ error: "Uncle cannot think right now, try again later." }, 500);
+    if (err instanceof ConfigError) {
+      return json({ error: "Uncle is not set up properly. Ask the person running this app to check the API keys." }, 500);
+    }
+    if (err?.name === "TimeoutError") {
+      return json({ error: "Uncle took too long to think. Try again." }, 504);
+    }
+    return json({ error: "Uncle cannot think right now, try again later." }, 502);
   }
+}
+
+function methodNotAllowed(allow) {
+  return new Response("Method not allowed", { status: 405, headers: { allow } });
 }
 
 function json(data, status = 200) {
